@@ -714,6 +714,7 @@ def visualize_best_controller(controller_file: str):
 def compare_controllers_visually():
     """Compare random vs best evolved controllers visually."""
     from pathlib import Path
+    from mujoco import viewer
 
     results_dir = Path("results")
 
