@@ -7,6 +7,9 @@ for the ARIEL Gecko robot. It includes baseline random controller, Evolution Str
 and Genetic Algorithm (GA) implementations.
 """
 
+import sys
+sys.path.append('../ariel/src')
+
 import numpy as np
 import mujoco
 import matplotlib.pyplot as plt
@@ -716,22 +719,37 @@ def compare_controllers_visually():
     from pathlib import Path
     from mujoco import viewer
 
-    results_dir = Path("results")
-
     print("\n🔍 CONTROLLER COMPARISON")
     print("="*50)
 
-    # Check for available controllers
-    controller_files = list(results_dir.glob("*_best_controller.pkl"))
+    # Check for available controllers in all results directories
+    controller_files = []
+
+    # Check regular results
+    results_dir = Path("results")
+    if results_dir.exists():
+        controller_files.extend(list(results_dir.glob("*_best_controller.pkl")))
+
+    # Check DEAP results
+    deap_results_dir = Path("results_deap")
+    if deap_results_dir.exists():
+        controller_files.extend(list(deap_results_dir.glob("*_best_controller.pkl")))
+
+    # Check quick results
+    quick_results_dir = Path("results_quick")
+    if quick_results_dir.exists():
+        controller_files.extend(list(quick_results_dir.glob("*_best_controller.pkl")))
 
     if not controller_files:
         print("❌ No trained controllers found!")
-        print("Run experiments first: python neuroevolution_experiments.py")
+        print("Run experiments first:")
+        print("  python neuroevolution_experiments.py")
+        print("  python neuroevolution_deap.py")
         return
 
     print(f"Found {len(controller_files)} trained controllers:")
     for i, file in enumerate(controller_files):
-        print(f"  {i+1}. {file.name}")
+        print(f"  {i+1}. {file.name} [{file.parent.name}]")
 
     print(f"\n0. Random controller (baseline)")
 
