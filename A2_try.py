@@ -1,4 +1,5 @@
 # Third-party libraries
+from datetime import date, datetime, timedelta
 import numpy as np
 import mujoco
 from mujoco import viewer
@@ -8,12 +9,16 @@ import matplotlib.pyplot as plt
 from ariel.utils.renderers import video_renderer
 from ariel.utils.video_recorder import VideoRecorder
 from ariel.simulation.environments.simple_flat_world import SimpleFlatWorld
+# import ariel.simulation.tasks.gate_learning
+from ariel.simulation.tasks.gate_learning import xy_displacement, y_speed
 
 # import prebuilt robot phenotypes
 from ariel.body_phenotypes.robogen_lite.prebuilt_robots.gecko import gecko
 
 # Keep track of data / history
 HISTORY = []
+FITNESS_HISTORY = []
+TIME_HISTORY = []
 
 
 def random_move(model, data, to_track) -> None:
@@ -133,8 +138,16 @@ def controller_2(model, data, to_track):
     def sigmoid(x):
         return 1.0 / (1.0 + np.exp(-x))
 
-    # fitness
-    fitness = np.sum(data.qpos) # example, higher values = higher fitness
+    fitness = 0
+    if len(HISTORY) > 1:
+        pos =  np.array(HISTORY)
+
+        # More absolute displacement = Better
+        fitness = xy_displacement(pos[-1], pos[-2]) # example, higher values = higher fitness
+        
+        # Higher speed on Y axis = better
+        fitness = max(y_speed(pos[-1], pos[-2], (TIME_HISTORY[-1] - TIME_HISTORY[-2]).total_seconds()), 0.0)
+
 
     # Simple 3-layer neural network
     input_size = len(data.qpos)
@@ -145,8 +158,8 @@ def controller_2(model, data, to_track):
     # Initialize the networks weights randomly
     w1 = np.random.randn(input_size, hidden_size) * 0.1
     w2 = np.random.randn(hidden_size, hidden_size) * 0.1
-    w3 = np.random.randn(hidden_size, output_size) * 0.1
-    print(w3)
+    w3 = np.random.randn(hidden_size, output_size) * 1.2
+    # print(w3)
 
     # Get inputs, in this case the positions of the actuator motors (hinges)
     inputs = data.qpos
@@ -161,6 +174,8 @@ def controller_2(model, data, to_track):
 
     # Save movement to history
     HISTORY.append(to_track[0].xpos.copy())
+    FITNESS_HISTORY.append(fitness)
+    TIME_HISTORY.append(datetime.now())
 
 def sine_controller(model, data, to_track):
     if  PARAMS is None:
@@ -222,7 +237,7 @@ def main():
         (1.1, 1.4, 0.7),   # joint 7
     ]
 
-    mujoco.set_mjcb_control(lambda m,d: sine_controller(m, d, to_track)) # random_move(m, d, to_track)
+    mujoco.set_mjcb_control(lambda m,d: controller_2(m, d, to_track)) # random_move(m, d, to_track)
 
     # This opens a viewer window and runs the simulation with the controller you defined
     # If mujoco.set_mjcb_control(None), then you can control the limbs yourself.
@@ -231,6 +246,9 @@ def main():
         data=data,
     )
     show_qpos_history(HISTORY)
+    print('max: ', np.max(FITNESS_HISTORY))
+    print('mean: ', np.mean(FITNESS_HISTORY))
+    print('min: ', np.min(FITNESS_HISTORY))
     # If you want to record a video of your simulation, you can use the video renderer.
 
     # # Non-default VideoRecorder options
