@@ -87,10 +87,28 @@ class DEAPEvolutionaryAlgorithm:
 
     def evaluate_individual(self, individual, simulator: RobotSimulator) -> Tuple[float,]:
         """Evaluate a single individual."""
-        controller = NeuralNetworkController(self.input_size, self.hidden_size,
-                                           self.output_size, np.array(individual))
-        fitness = simulator.evaluate_controller(controller)
-        return (fitness,)  # DEAP expects tuple
+        try:
+            # Ensure individual is proper numpy array
+            individual_array = np.array(individual, dtype=float)
+
+            if len(individual_array) != self.genome_size:
+                print(f"Warning: Individual size mismatch: {len(individual_array)} vs {self.genome_size}")
+                return (0.0,)
+
+            controller = NeuralNetworkController(self.input_size, self.hidden_size,
+                                               self.output_size, individual_array)
+            fitness = simulator.evaluate_controller(controller)
+
+            # Fitness tripping bruh
+            if not isinstance(fitness, (int, float)) or np.isnan(fitness) or np.isinf(fitness):
+                print(f"Warning: Invalid fitness value: {fitness}")
+                return (0.0,)
+
+            return (float(fitness),)  # DEAP expects tuple
+
+        except Exception as e:
+            print(f"Error in evaluate_individual: {e}")
+            return (0.0,)
 
     def run_evolution(self, simulator: RobotSimulator, generations: int,
                      cxpb: float = 0.8, mutpb: float = 0.1) -> Tuple[List[float], List[float], np.ndarray]:
@@ -119,9 +137,18 @@ class DEAPEvolutionaryAlgorithm:
         print(f"Running {self.algorithm_type} with {self.pop_size} individuals for {generations} generations")
 
         # Evaluate initial population
-        fitnesses = [self.toolbox.evaluate(ind) for ind in population]
-        for ind, fit in zip(population, fitnesses):
-            ind.fitness.values = fit
+        print(f"Evaluating initial population of {len(population)} individuals...")
+        fitnesses = []
+        for i, ind in enumerate(population):
+            try:
+                fit = self.toolbox.evaluate(ind)
+                fitnesses.append(fit)
+                ind.fitness.values = fit
+            except Exception as e:
+                print(f"Warning: Individual {i} evaluation failed: {e}")
+                # Assign very low fitness to failed individuals
+                ind.fitness.values = (0.0,)
+                fitnesses.append((0.0,))
 
         # Evolution loop
         for generation in range(generations):
@@ -131,11 +158,15 @@ class DEAPEvolutionaryAlgorithm:
                 # Standard genetic algorithm
                 offspring = algorithms.varAnd(population, self.toolbox, cxpb=cxpb, mutpb=mutpb)
 
-                # Evaluate offspring
-                fitnesses = [self.toolbox.evaluate(ind) for ind in offspring if not ind.fitness.valid]
-                for ind, fit in zip(offspring, fitnesses):
-                    if not ind.fitness.valid:
+                # Evaluate offspring that don't have valid fitness
+                invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+                for ind in invalid_ind:
+                    try:
+                        fit = self.toolbox.evaluate(ind)
                         ind.fitness.values = fit
+                    except Exception as e:
+                        print(f"Warning: Offspring evaluation failed: {e}")
+                        ind.fitness.values = (0.0,)
 
                 # Select next generation
                 population = self.toolbox.select(offspring + population, self.pop_size)
@@ -151,17 +182,29 @@ class DEAPEvolutionaryAlgorithm:
                     del mutant.fitness.values  # Invalidate fitness
 
                 # Evaluate offspring
-                fitnesses = [self.toolbox.evaluate(ind) for ind in offspring]
-                for ind, fit in zip(offspring, fitnesses):
-                    ind.fitness.values = fit
+                for ind in offspring:
+                    try:
+                        fit = self.toolbox.evaluate(ind)
+                        ind.fitness.values = fit
+                    except Exception as e:
+                        print(f"Warning: ES offspring evaluation failed: {e}")
+                        ind.fitness.values = (0.0,)
 
                 # (μ+λ) selection: select best from parents + offspring
                 population = self.toolbox.select(population + offspring, self.pop_size)
 
-            # Update statistics
-            record = stats.compile(population)
-            best_fitness_history.append(record['max'])
-            avg_fitness_history.append(record['avg'])
+            # Update statistics - ensure all fitness values are valid
+            valid_population = [ind for ind in population if ind.fitness.valid and len(ind.fitness.values) > 0]
+
+            if not valid_population:
+                print(f"Warning: No valid individuals in generation {generation + 1}")
+                best_fitness_history.append(0.0)
+                avg_fitness_history.append(0.0)
+                record = {'max': 0.0, 'avg': 0.0, 'std': 0.0}
+            else:
+                record = stats.compile(valid_population)
+                best_fitness_history.append(record['max'])
+                avg_fitness_history.append(record['avg'])
 
             # Update hall of fame
             hof.update(population)
