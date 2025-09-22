@@ -747,8 +747,7 @@ def compare_controllers_visually():
             if choice == 0:
                 # Show random controller
                 print("\n🎲 Showing random controller...")
-                simulator = RobotSimulator(simulation_time=30.0)
-                random_controller = NeuralNetworkController(29, 16, 8)
+                print("💡 This shows truly random movements (not trained)")
 
                 # Set up visual simulation for random controller
                 mujoco.set_mjcb_control(None)
@@ -759,13 +758,47 @@ def compare_controllers_visually():
                 model = world.spec.compile()
                 data = mujoco.MjData(model)
 
+                # Track movement
+                history = []
+                geoms = world.spec.worldbody.find_all(mujoco.mjtObj.mjOBJ_GEOM)
+                to_track = [data.bind(geom) for geom in geoms if "core" in geom.name]
+
                 def random_control(model, data):
-                    inputs = np.concatenate([data.qpos, data.qvel])
-                    outputs = random_controller.forward(inputs)
-                    data.ctrl = np.clip(outputs, -np.pi/2, np.pi/2)
+                    # Generate truly random control signals each timestep
+                    num_joints = model.nu
+                    hinge_range = np.pi/2
+
+                    # Create random movements with some scaling for visibility
+                    random_movements = np.random.uniform(-hinge_range, hinge_range, num_joints)
+
+                    # Apply with some dampening to avoid too chaotic movement
+                    data.ctrl = np.clip(random_movements * 0.3, -np.pi/2, np.pi/2)
+
+                    # Track movement
+                    if to_track:
+                        history.append(to_track[0].xpos.copy())
 
                 mujoco.set_mjcb_control(random_control)
-                viewer.launch(model=model, data=data)
+
+                print("🎮 Launching random controller visualization...")
+                print("📊 You should see chaotic, uncoordinated movement")
+                print("🔄 Close viewer when done")
+
+                try:
+                    viewer.launch(model=model, data=data)
+
+                    # Show movement analysis after closing
+                    if len(history) > 1:
+                        positions = np.array(history)
+                        total_distance = np.sum(np.sqrt(np.sum(np.diff(positions, axis=0)**2, axis=1)))
+                        forward_distance = positions[-1, 0] - positions[0, 0]
+                        print(f"\n📈 Random Controller Performance:")
+                        print(f"   Total distance: {total_distance:.4f}")
+                        print(f"   Forward movement: {forward_distance:.4f}")
+                        print(f"   Movement type: Random/chaotic")
+
+                except Exception as e:
+                    print(f"❌ Visualization error: {e}")
 
             elif 1 <= choice <= len(controller_files):
                 controller_file = controller_files[choice - 1]
