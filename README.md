@@ -47,7 +47,7 @@
 6. **Return to project directory and test**:
    ```bash
    cd ../EC2
-   python test_implementation.py  # Test implementation
+   python A2-try.py  # Test implementation
    ```
 
 ## Evolutionary Algorithms Implemented
