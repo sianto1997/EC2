@@ -5,6 +5,9 @@ Assignment 2 - Evolutionary Computing
 This version uses the DEAP (Distributed Evolutionary Algorithms in Python) library
 """
 
+import sys
+sys.path.append('../ariel/src')
+
 import numpy as np
 import mujoco
 import matplotlib.pyplot as plt
@@ -18,11 +21,7 @@ import random
 # DEAP imports
 from deap import base, creator, tools, algorithms
 
-# ARIEL imports
-from ariel.simulation.environments.simple_flat_world import SimpleFlatWorld
-from ariel.body_phenotypes.robogen_lite.prebuilt_robots.gecko import gecko
-
-# Import our neural network controller
+# Import our neural network controller (removed ARIEL direct imports)
 from neuroevolution_experiments import NeuralNetworkController, RobotSimulator
 
 
@@ -99,7 +98,7 @@ class DEAPEvolutionaryAlgorithm:
                                                self.output_size, individual_array)
             fitness = simulator.evaluate_controller(controller)
 
-            # Fitness tripping bruh
+            # Ensure fitness is a valid number
             if not isinstance(fitness, (int, float)) or np.isnan(fitness) or np.isinf(fitness):
                 print(f"Warning: Invalid fitness value: {fitness}")
                 return (0.0,)
@@ -230,9 +229,10 @@ def run_deap_experiments():
 
     # Experiment configurations
     experiments = {
-        "DEAP_GA": {"algorithm_type": "GA", "generations": 50, "pop_size": 30},
-        "DEAP_ES": {"algorithm_type": "ES", "generations": 50, "pop_size": 30},
-        "DEAP_CMA": {"algorithm_type": "CMA", "generations": 50, "pop_size": 20}
+        # Match the 5,000-evaluation budget used in neuroevolution_experiments.py
+        "DEAP_GA": {"algorithm_type": "GA", "generations": 100, "pop_size": 50},
+        "DEAP_ES": {"algorithm_type": "ES", "generations": 100, "pop_size": 50},
+        "DEAP_CMA": {"algorithm_type": "CMA", "generations": 100, "pop_size": 50}
     }
 
     # Network dimensions
