@@ -15,6 +15,7 @@ import mujoco
 import matplotlib.pyplot as plt
 import pickle
 import json
+import argparse
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Callable
 from dataclasses import dataclass
@@ -509,72 +510,86 @@ def create_experiment_configs() -> Dict[str, ExperimentConfig]:
     return configs
 
 
-def plot_results(results_dir: str = "results"): # NOT SURE IF IT WORKS
-    """Generate plots from experimental results."""
+def plot_results(results_dirs: Optional[List[str]] = None):
+    """Generate plots and summary statistics from one or more results directories."""
 
-    results_path = Path(results_dir)
+    if results_dirs is None:
+        results_dirs = ["results"]
 
-    # Load all results
-    all_results = {}
+    all_results: Dict[str, List[Dict]] = {}
+    existing_dirs: List[Path] = []
 
-    for results_file in results_path.glob("*_results.pkl"):
-        with open(results_file, 'rb') as f:
-            result = pickle.load(f)
+    for directory in results_dirs:
+        results_path = Path(directory)
+        if not results_path.exists():
+            print(f"Results directory not found: {results_path}")
+            continue
 
-        exp_name = result['experiment_name']
-        if exp_name not in all_results:
-            all_results[exp_name] = []
-        all_results[exp_name].append(result)
+        existing_dirs.append(results_path)
 
-    # Create plots
-    plt.figure(figsize=(15, 5))
+        for results_file in sorted(results_path.glob("*_results.pkl")):
+            try:
+                with open(results_file, 'rb') as f:
+                    result = pickle.load(f)
+            except Exception as exc:
+                print(f"Skipping {results_file} (failed to load: {exc})")
+                continue
 
-    # Plot 1: Evolution curves with std shading
-    plt.subplot(1, 3, 1)
+            all_results.setdefault(result['experiment_name'], []).append(result)
 
+    if not all_results:
+        print("No result files found in the provided directories")
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    evolution_ax, final_ax, convergence_ax = axes
+
+    # --- Plot 1: Evolution curves with std shading ---
     for exp_name, results_list in all_results.items():
+        if not results_list:
+            continue
+
         if exp_name == 'Random_Baseline':
-            # Plot baseline as horizontal line
             baseline_fitness = np.mean([r['avg_fitness'] for r in results_list])
             baseline_std = np.std([r['avg_fitness'] for r in results_list])
+            evolution_ax.axhline(
+                baseline_fitness,
+                color='tab:red',
+                linestyle='--',
+                label=f'Random Baseline {baseline_fitness:.2f}±{baseline_std:.2f}'
+            )
+            evolution_ax.axhspan(
+                baseline_fitness - baseline_std,
+                baseline_fitness + baseline_std,
+                alpha=0.2,
+                color='tab:red'
+            )
+            continue
 
-            plt.axhline(y=baseline_fitness, color='red', linestyle='--',
-                       label=f'Random Baseline ({baseline_fitness:.2f}±{baseline_std:.2f})')
-            plt.axhspan(baseline_fitness - baseline_std, baseline_fitness + baseline_std,
-                       alpha=0.2, color='red')
-        else:
-            # Plot evolution curves
-            if results_list:
-                # Extract fitness histories
-                fitness_histories = [r['best_fitness_history'] for r in results_list]
+        fitness_histories = [r['best_fitness_history'] for r in results_list if r['best_fitness_history']]
+        if not fitness_histories:
+            continue
 
-                # Ensure all have same length
-                min_length = min(len(h) for h in fitness_histories)
-                fitness_histories = [h[:min_length] for h in fitness_histories]
+        min_length = min(len(history) for history in fitness_histories)
+        trimmed = np.array([history[:min_length] for history in fitness_histories])
+        generations = np.arange(1, min_length + 1)
 
-                # Calculate mean and std
-                fitness_array = np.array(fitness_histories)
-                mean_fitness = np.mean(fitness_array, axis=0)
-                std_fitness = np.std(fitness_array, axis=0)
+        mean_fitness = trimmed.mean(axis=0)
+        std_fitness = trimmed.std(axis=0)
 
-                generations = range(len(mean_fitness))
+        evolution_ax.plot(generations, mean_fitness, label=f'{exp_name}')
+        evolution_ax.fill_between(generations, mean_fitness - std_fitness, mean_fitness + std_fitness, alpha=0.2)
 
-                plt.plot(generations, mean_fitness, label=f'{exp_name} (mean)')
-                plt.fill_between(generations, mean_fitness - std_fitness,
-                               mean_fitness + std_fitness, alpha=0.3)
+    evolution_ax.set_xlabel('Generation')
+    evolution_ax.set_ylabel('Best Fitness')
+    evolution_ax.set_title('Evolution Progress (mean ± std)')
+    evolution_ax.grid(True, alpha=0.3)
+    evolution_ax.legend()
 
-    plt.xlabel('Generation')
-    plt.ylabel('Fitness')
-    plt.title('Evolution Progress')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-
-    # Plot 2: Final performance comparison
-    plt.subplot(1, 3, 2)
-
-    exp_names = []
-    final_fitness = []
-    final_std = []
+    # --- Plot 2: Final performance comparison ---
+    exp_names: List[str] = []
+    final_fitness: List[float] = []
+    final_std: List[float] = []
 
     for exp_name, results_list in all_results.items():
         if exp_name == 'Random_Baseline':
@@ -582,50 +597,125 @@ def plot_results(results_dir: str = "results"): # NOT SURE IF IT WORKS
         else:
             fitness_values = [r['best_fitness'] for r in results_list]
 
+        if not fitness_values:
+            continue
+
         exp_names.append(exp_name)
-        final_fitness.append(np.mean(fitness_values))
-        final_std.append(np.std(fitness_values))
+        final_fitness.append(float(np.mean(fitness_values)))
+        final_std.append(float(np.std(fitness_values)))
 
-    bars = plt.bar(exp_names, final_fitness, yerr=final_std, capsize=5)
-    plt.ylabel('Final Fitness')
-    plt.title('Final Performance Comparison')
-    plt.xticks(rotation=45)
+    bar_positions = np.arange(len(exp_names))
+    bars = final_ax.bar(bar_positions, final_fitness, yerr=final_std, capsize=5, color='lightsteelblue')
+    final_ax.set_xticks(bar_positions)
+    final_ax.set_xticklabels(exp_names, rotation=30, ha='right')
+    final_ax.set_ylabel('Final Fitness')
+    final_ax.set_title('Final Performance Comparison')
+    final_ax.grid(True, axis='y', alpha=0.2)
 
-    # Add value labels on bars
-    for bar, fitness, std in zip(bars, final_fitness, final_std):
-        height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2., height + std + 0.1,
-                f'{fitness:.2f}±{std:.2f}', ha='center', va='bottom')
+    # Use bar labels to avoid annotations outside plot bounds
+    labels = [f'{fit:.2f}\n±{std:.2f}' for fit, std in zip(final_fitness, final_std)]
+    final_ax.bar_label(bars, labels=labels, padding=4, fontsize=9)
 
-    # Plot 3: Convergence analysis
-    plt.subplot(1, 3, 3)
-
+    # --- Plot 3: Convergence analysis ---
     for exp_name, results_list in all_results.items():
-        if exp_name != 'Random_Baseline' and results_list:
-            # Calculate generations to reach certain fitness thresholds
-            target_fitness = 0.8 * max([r['best_fitness'] for r in results_list])
+        if exp_name == 'Random_Baseline':
+            continue
 
-            convergence_gens = []
-            for result in results_list:
-                fitness_hist = result['best_fitness_history']
-                converged_gen = next((i for i, f in enumerate(fitness_hist) if f >= target_fitness), len(fitness_hist))
-                convergence_gens.append(converged_gen)
+        target = 0.8 * max(r['best_fitness'] for r in results_list if 'best_fitness' in r)
+        convergence_generations: List[int] = []
+        for result in results_list:
+            history = result.get('best_fitness_history', [])
+            if not history:
+                continue
+            converged_gen = next((idx for idx, value in enumerate(history, start=1) if value >= target), len(history))
+            convergence_generations.append(converged_gen)
 
-            plt.hist(convergence_gens, alpha=0.7, label=f'{exp_name}', bins=10)
+        if convergence_generations:
+            convergence_ax.hist(convergence_generations, bins=min(10, len(convergence_generations)), alpha=0.6, label=exp_name)
 
-    plt.xlabel('Generations to Convergence')
-    plt.ylabel('Frequency')
-    plt.title('Convergence Analysis')
-    plt.legend()
+    convergence_ax.set_xlabel('Generations to 80% of Max Fitness')
+    convergence_ax.set_ylabel('Frequency')
+    convergence_ax.set_title('Convergence Analysis')
+    convergence_ax.grid(True, alpha=0.3)
+    convergence_ax.legend()
 
-    plt.tight_layout()
-    plt.savefig(results_path / 'experiment_results.png', dpi=300, bbox_inches='tight')
+    fig.suptitle('Robot Neuroevolution Experiment Summary', fontsize=16)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    output_base = existing_dirs[0] if existing_dirs else Path('.')
+    output_path = output_base / 'experiment_results.png'
+    fig.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.show()
 
+    # Save per-experiment evolution plots (aligns with assignment wording)
+    for exp_name, results_list in all_results.items():
+        if not results_list:
+            continue
+
+        fig_exp, ax_exp = plt.subplots(figsize=(7, 4))
+
+        if exp_name == 'Random_Baseline':
+            score_histories = [r.get('fitness_scores', []) for r in results_list if r.get('fitness_scores')]
+            if not score_histories:
+                plt.close(fig_exp)
+                continue
+
+            # Plot each repetition
+            for rep_idx, scores in enumerate(score_histories, start=1):
+                x_vals = np.arange(1, len(scores) + 1)
+                ax_exp.plot(x_vals, scores, alpha=0.35, label=f'Repetition {rep_idx}')
+
+            # Plot mean curve
+            min_len = min(len(scores) for scores in score_histories)
+            trimmed = np.array([scores[:min_len] for scores in score_histories])
+            ax_exp.plot(
+                np.arange(1, min_len + 1),
+                trimmed.mean(axis=0),
+                color='black',
+                linewidth=2,
+                label='Mean'
+            )
+
+            ax_exp.set_xlabel('Evaluation')
+            ax_exp.set_ylabel('Fitness')
+            ax_exp.set_title('Random Baseline Fitness per Evaluation')
+        else:
+            fitness_histories = [r['best_fitness_history'] for r in results_list if r['best_fitness_history']]
+            if not fitness_histories:
+                plt.close(fig_exp)
+                continue
+
+            min_length = min(len(history) for history in fitness_histories)
+            trimmed = np.array([history[:min_length] for history in fitness_histories])
+            generations = np.arange(1, min_length + 1)
+
+            for rep_idx, history in enumerate(fitness_histories, start=1):
+                ax_exp.plot(np.arange(1, len(history) + 1), history, alpha=0.3, label=f'Repetition {rep_idx}')
+
+            ax_exp.plot(generations, trimmed.mean(axis=0), color='black', linewidth=2, label='Mean')
+            ax_exp.fill_between(
+                generations,
+                trimmed.mean(axis=0) - trimmed.std(axis=0),
+                trimmed.mean(axis=0) + trimmed.std(axis=0),
+                alpha=0.2,
+                color='grey'
+            )
+
+            ax_exp.set_xlabel('Generation')
+            ax_exp.set_ylabel('Best Fitness')
+            ax_exp.set_title(f'{exp_name} Evolution per Generation')
+
+        ax_exp.grid(True, alpha=0.3)
+        ax_exp.legend()
+        fig_exp.tight_layout()
+
+        exp_output = output_base / f'{exp_name}_evolution.png'
+        fig_exp.savefig(exp_output, dpi=300, bbox_inches='tight')
+        plt.close(fig_exp)
+
     # Print summary statistics
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("EXPERIMENT SUMMARY")
-    print("="*80)
+    print("=" * 80)
 
     for exp_name, results_list in all_results.items():
         print(f"\n{exp_name}:")
@@ -640,6 +730,21 @@ def plot_results(results_dir: str = "results"): # NOT SURE IF IT WORKS
 
             total_times = [r['total_time'] for r in results_list]
             print(f"  Average runtime: {np.mean(total_times):.1f} ± {np.std(total_times):.1f} seconds")
+
+    print(f"\nSummary plot saved to: {output_path}")
+    for exp_name, results_list in all_results.items():
+        if results_list:
+            print(f"   • {exp_name}: {output_base / (exp_name + '_evolution.png')}")
+
+
+def _default_plot_dirs(primary: str) -> List[str]:
+    """Return default plot directories, prioritising the primary path."""
+    candidates = [primary, "results_deap", "results_quick", "results_final"]
+    ordered: List[str] = []
+    for candidate in candidates:
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return ordered
 
 
 def visualize_best_controller(controller_file: str):
@@ -657,9 +762,9 @@ def visualize_best_controller(controller_file: str):
     try:
         with open(controller_file, 'rb') as f:
             controller = pickle.load(f)
-        print(f"✅ Controller loaded successfully")
+        print(f"Controller loaded successfully")
     except FileNotFoundError:
-        print(f"❌ Controller file not found: {controller_file}")
+        print(f"Controller file not found: {controller_file}")
         print("Run experiments first to generate controllers!")
         return
 
@@ -689,11 +794,9 @@ def visualize_best_controller(controller_file: str):
 
     mujoco.set_mjcb_control(evolved_controller)
 
-    print("\n🎮 CONTROLLER VISUALIZATION")
+    print("\nCONTROLLER VISUALIZATION")
     print("="*50)
-    print("🤖 Watch your evolved robot in action!")
-    print("📊 Close the viewer window when done watching")
-    print("⚡ Controller will run indefinitely until you close the window")
+    print("Close the viewer window when done watching")
     print("="*50)
 
     # Launch viewer - ENOJAY DA VIEW! xD
@@ -708,7 +811,7 @@ def visualize_best_controller(controller_file: str):
             distances = np.sqrt(np.sum(np.diff(positions, axis=0)**2, axis=1))
             total_distance = np.sum(distances)
             forward_distance = positions[-1, 0] - positions[0, 0]
-            print(f"\n📈 Performance metrics:")
+            print(f"\nPerformance metrics:")
             print(f"   Total distance traveled: {total_distance:.3f}")
             print(f"   Forward movement: {forward_distance:.3f}")
             print(f"   Final position: {positions[-1]}")
@@ -719,7 +822,7 @@ def compare_controllers_visually():
     from pathlib import Path
     from mujoco import viewer
 
-    print("\n🔍 CONTROLLER COMPARISON")
+    print("\nCONTROLLER COMPARISON")
     print("="*50)
 
     # Check for available controllers in all results directories
@@ -741,7 +844,7 @@ def compare_controllers_visually():
         controller_files.extend(list(quick_results_dir.glob("*_best_controller.pkl")))
 
     if not controller_files:
-        print("❌ No trained controllers found!")
+        print("No trained controllers found!")
         print("Run experiments first:")
         print("  python neuroevolution_experiments.py")
         print("  python neuroevolution_deap.py")
@@ -764,8 +867,8 @@ def compare_controllers_visually():
 
             if choice == 0:
                 # Show random controller
-                print("\n🎲 Showing random controller...")
-                print("💡 This shows truly random movements (not trained)")
+                print("\nShowing random controller...")
+                print("This shows truly random movements (not trained)")
 
                 # Set up visual simulation for random controller
                 mujoco.set_mjcb_control(None)
@@ -798,9 +901,9 @@ def compare_controllers_visually():
 
                 mujoco.set_mjcb_control(random_control)
 
-                print("🎮 Launching random controller visualization...")
-                print("📊 You should see chaotic, uncoordinated movement")
-                print("🔄 Close viewer when done")
+                print("Launching random controller visualization...")
+                print("You should see chaotic, uncoordinated movement")
+                print("Close viewer when done")
 
                 try:
                     viewer.launch(model=model, data=data)
@@ -810,53 +913,76 @@ def compare_controllers_visually():
                         positions = np.array(history)
                         total_distance = np.sum(np.sqrt(np.sum(np.diff(positions, axis=0)**2, axis=1)))
                         forward_distance = positions[-1, 0] - positions[0, 0]
-                        print(f"\n📈 Random Controller Performance:")
+                        print(f"\nRandom Controller Performance:")
                         print(f"   Total distance: {total_distance:.4f}")
                         print(f"   Forward movement: {forward_distance:.4f}")
                         print(f"   Movement type: Random/chaotic")
 
                 except Exception as e:
-                    print(f"❌ Visualization error: {e}")
+                    print(f"Visualization error: {e}")
 
             elif 1 <= choice <= len(controller_files):
                 controller_file = controller_files[choice - 1]
                 visualize_best_controller(str(controller_file))
             else:
-                print(f"❌ Invalid choice. Please enter 0-{len(controller_files)}")
+                print(f"Invalid choice. Please enter 0-{len(controller_files)}")
 
         except ValueError:
-            print("❌ Invalid input. Please enter a number or 'q'")
+            print("Invalid input. Please enter a number or 'q'")
         except KeyboardInterrupt:
             print("\nVisualization interrupted")
             break
 
 
 if __name__ == "__main__":
-    import sys
+    parser = argparse.ArgumentParser(
+        description="Robot Neuroevolution experiments and analysis",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="Launch the controller comparison viewer"
+    )
+    parser.add_argument(
+        "--plots",
+        action="store_true",
+        help="Generate summary plots from existing experiment results"
+    )
+    parser.add_argument(
+        "--plot-dirs",
+        nargs="+",
+        default=None,
+        help="Result directories to include when generating plots"
+    )
+    parser.add_argument(
+        "--results-dir",
+        default="results",
+        help="Directory where new experiment outputs will be written"
+    )
 
-    # Check for visualization mode
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--visualize":
-            print("🎮 ROBOT VISUALIZATION MODE")
-            print("="*50)
-            compare_controllers_visually()
-            sys.exit(0)
-        elif sys.argv[1] == "--help":
-            print("Robot Neuroevolution - Usage:")
-            print("  python neuroevolution_experiments.py          # Run full experiments")
-            print("  python neuroevolution_experiments.py --visualize  # Visualize controllers")
-            print("  python neuroevolution_experiments.py --help   # Show this help")
-            sys.exit(0)
+    args = parser.parse_args()
+
+    if args.visualize:
+        print("ROBOT VISUALIZATION MODE")
+        print("=" * 50)
+        compare_controllers_visually()
+        sys.exit(0)
+
+    if args.plots:
+        plot_dirs = args.plot_dirs or _default_plot_dirs(args.results_dir)
+        print("\nGenerating plots...")
+        plot_results(plot_dirs)
+        sys.exit(0)
 
     # Run complete experimental setup
-    print("🤖 Starting Robot Neuroevolution Experiments")
-    print("="*50)
-    print("⚡ Running in HEADLESS mode for performance")
-    print("💡 To see robot movement, use: python neuroevolution_experiments.py --visualize")
-    print("="*50)
+    print("Starting Robot Neuroevolution Experiments")
+    print("=" * 50)
+    print("Running in HEADLESS mode for performance")
+    print("=" * 50)
 
     # Create experiment runner
-    runner = ExperimentRunner()
+    runner = ExperimentRunner(results_dir=args.results_dir)
 
     # Get experiment configurations
     configs = create_experiment_configs()
@@ -884,15 +1010,15 @@ if __name__ == "__main__":
             config.random_seed = 42 + rep
             runner.run_experiment(alg_class, config, alg_name, rep)
 
-    print("\n" + "="*50)
-    print("🎉 All experiments completed!")
+    print("\n" + "=" * 50)
+    print("All experiments completed!")
 
-    # Generate plots
-    print("\n📊 Generating plots...")
-    plot_results()
+    # Generate plots for freshly produced results only
+    print("\nGenerating plots...")
+    plot_results([runner.results_dir.as_posix()])
 
-    print(f"\n📁 Results saved in: {runner.results_dir}")
-    print("💾 Best controllers saved as .pkl files for each experiment")
-    print("\n🎮 TO SEE YOUR ROBOTS IN ACTION:")
+    print(f"\nResults saved in: {runner.results_dir}")
+    print("Best controllers saved as .pkl files for each experiment")
+    print("\nTO SEE YOUR ROBOTS IN ACTION:")
     print("   python neuroevolution_experiments.py --visualize")
-    print("\n📈 Check the generated plots to see evolution progress!")
+    print("\nCheck the generated plots to see evolution progress!")
