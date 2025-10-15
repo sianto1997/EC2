@@ -377,7 +377,7 @@ def simulate_with_brain(robot_graph, weights, rng):
     ctrl = Controller(controller_callback_function=controller_func, tracker=tracker)
     mj.set_mjcb_control(lambda m, d: ctrl.set_control(m, d))
 
-    # 🔑 Dynamic duration based on global best
+    # Dynamic duration based on global best fitness
     duration = get_dynamic_duration(GLOBAL_BEST_FITNESS)
     simple_runner(model, data, duration=duration)
 
@@ -553,8 +553,8 @@ def main():
     parser = argparse.ArgumentParser(description="Robot Olympics - Assignment 3")
     parser.add_argument("--baseline", action="store_true",
                        help="Run baseline with random controllers")
-    parser.add_argument("--generations", type=int, default=50,
-                       help="Number of generations (default: 50)")
+    parser.add_argument("--generations", type=int, default=20,
+                       help="Number of generations (default: 20)")
     parser.add_argument("--population", type=int, default=20,
                        help="Population size (default: 20)")
     parser.add_argument("--repetitions", type=int, default=1,
